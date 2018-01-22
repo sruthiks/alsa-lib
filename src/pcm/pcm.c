@@ -2934,16 +2934,20 @@ int snd_pcm_avail_delay(snd_pcm_t *pcm,
  * \param format PCM sample format
  * \return 0 on success otherwise a negative error code
  */
-int snd_pcm_area_silence(const snd_pcm_channel_area_t *dst_area, snd_pcm_uframes_t dst_offset,
-			 unsigned int samples, snd_pcm_format_t format)
+int snd_pcm_area_silence(const snd_pcm_channel_area_t *dst_area,
+			 snd_pcm_uframes_t dst_offset,
+			 unsigned int sample_count,
+			 snd_pcm_format_t sample_format)
 {
 	/* FIXME: sub byte resolution and odd dst_offset */
 	char *dst;
 	unsigned int dst_step;
 	int width;
 	uint64_t silence;
+
 	if (!dst_area->addr)
 		return 0;
+
 	dst = snd_pcm_channel_area_addr(dst_area, dst_offset);
 	width = snd_pcm_format_physical_width(format);
 	silence = snd_pcm_format_silence_64(format);
@@ -3043,44 +3047,51 @@ int snd_pcm_area_silence(const snd_pcm_channel_area_t *dst_area, snd_pcm_uframes
  * \param format PCM sample format
  * \return 0 on success otherwise a negative error code
  */
-int snd_pcm_areas_silence(const snd_pcm_channel_area_t *dst_areas, snd_pcm_uframes_t dst_offset,
-			  unsigned int channels, snd_pcm_uframes_t frames, snd_pcm_format_t format)
+int snd_pcm_areas_silence(const snd_pcm_channel_area_t *dst_areas,
+			  snd_pcm_uframes_t dst_offset,
+			  unsigned int dst_areas_count,
+			  snd_pcm_uframes_t frame_count,
+			  snd_pcm_format_t sample_format)
 {
-	int width = snd_pcm_format_physical_width(format);
-	while (channels > 0) {
-		void *addr = dst_areas->addr;
-		unsigned int step = dst_areas->step;
-		const snd_pcm_channel_area_t *begin = dst_areas;
-		int channels1 = channels;
-		unsigned int chns = 0;
-		int err;
-		while (1) {
-			channels1--;
-			chns++;
+	int width = snd_pcm_format_physical_width(sample_format);
+	int err = 0;
+
+	while (dst_areas_count > 0) {
+		const snd_pcm_channel_area_t areas;
+		int ch;
+		snd_pcm_uframes_t areas_offset;
+		unsigned int sample_count;
+
+		/*
+		 * Pick up as much entries as possible in this group of area for
+		 * samples so that they're continuous.
+		 */
+		areas = dst_areas;
+		for (ch = 1; ch < dst_areas_count; ++ch) {
 			dst_areas++;
-			if (channels1 == 0 ||
-			    dst_areas->addr != addr ||
-			    dst_areas->step != step ||
+			if (dst_areas->addr  != dst_areas[-1].addr ||
+			    dst_areas->step  != dst_areas[-1].step ||
 			    dst_areas->first != dst_areas[-1].first + width)
 				break;
 		}
-		if (chns > 1 && chns * width == step) {
-			/* Collapse the areas */
-			snd_pcm_channel_area_t d;
-			d.addr = begin->addr;
-			d.first = begin->first;
-			d.step = width;
-			err = snd_pcm_area_silence(&d, dst_offset * chns, frames * chns, format);
-			channels -= chns;
-		} else {
-			err = snd_pcm_area_silence(begin, dst_offset, frames, format);
-			dst_areas = begin + 1;
-			channels--;
-		}
+
+		if (ch * width != areas.step)
+			ch = 1;
+
+		areas.step = width;
+		areas_offset = dst_offset * ch;
+		sample_count = frames * ch;
+
+		err = snd_pcm_area_silence(&areas, areas_offset, sample_count,
+					   sample_format);
 		if (err < 0)
-			return err;
+			break;
+
+		dst_areas += ch;
+		dst_areas_count -= ch;
 	}
-	return 0;
+
+	return err;
 }
 
 
